@@ -2,6 +2,9 @@ import rclpy as rp
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
+from pymycobot.mycobot import MyCobot
+import math
+
 class JointControlNode(Node):
     def __init__(self):
         # 노드 이름 등록
@@ -14,6 +17,7 @@ class JointControlNode(Node):
             10
             )
         
+        self.mc = MyCobot("/dev/ttyJETCOBOT", 1000000)
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.get_logger().info('jetcobot 관절 제어 노드가 켜졌습니다')
 
@@ -29,14 +33,12 @@ class JointControlNode(Node):
         ]
             
         
-        msg.position = [
-            0.0, 
-            0.0, 
-            0.0, 
-            0.0, 
-            0.0, 
-            0.0
-            ]
+        angles = self.mc.get_angles()
+        if angles and len(angles) == 6:
+            msg.position = [math.radians(a) for a in angles]
+
+        else:
+            return
         
         self.joint_pub.publish(msg)
 
