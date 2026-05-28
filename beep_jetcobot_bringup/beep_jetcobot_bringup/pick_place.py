@@ -2,7 +2,7 @@ import rclpy as rp
 from rclpy.node import Node
 
 
-from pymycobot.mycobot280 import MyCobot280
+from pymycobot import MyCobot
 import time
 
 # 클래스 생성
@@ -10,7 +10,7 @@ class PickPlaceNode(Node):
     def __init__(self):
         super().__init__('pick_place_node')
 
-        self.mc = MyCobot280('/dev/ttyJETCOBOT', 1000000)
+        self.mc = MyCobot('/dev/ttyJETCOBOT', 1000000)
         self.speed = 30
 
         
