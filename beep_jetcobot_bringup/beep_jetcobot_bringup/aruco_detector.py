@@ -1,10 +1,30 @@
+import threading
 import rclpy
 from rclpy.node import Node
 import cv2
 import cv2.aruco as aruco
+from flask import Flask, Response
 
 
 ARUCO_DICT = aruco.DICT_6X6_250
+FLASK_PORT = 5000
+
+_latest_frame = None
+_frame_lock = threading.Lock()
+
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/stream')
+def stream():
+    def generate():
+        while True:
+            with _frame_lock:
+                frame = _latest_frame
+            if frame is None:
+                continue
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 class ArucoDetectorNode(Node):
@@ -20,10 +40,17 @@ class ArucoDetectorNode(Node):
         self.aruco_params = aruco.DetectorParameters()
         self.detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
 
+        flask_thread = threading.Thread(
+            target=lambda: flask_app.run(host='0.0.0.0', port=FLASK_PORT, threaded=True),
+            daemon=True
+        )
+        flask_thread.start()
+
         self.timer = self.create_timer(0.03, self.detect)
-        self.get_logger().info('aruco_detector_node 시작')
+        self.get_logger().info(f'aruco_detector_node 시작 — 스트림: http://0.0.0.0:{FLASK_PORT}/stream')
 
     def detect(self):
+        global _latest_frame
         ret, frame = self.cap.read()
         if not ret:
             self.get_logger().warn('프레임을 읽을 수 없습니다')
@@ -39,12 +66,12 @@ class ArucoDetectorNode(Node):
                 cy = int(corners[i][0][:, 1].mean())
                 self.get_logger().info(f'마커 ID: {marker_id} | 중심: ({cx}, {cy})')
 
-        cv2.imshow('ArUco Detector', frame)
-        cv2.waitKey(1)
+        _, buf = cv2.imencode('.jpg', frame)
+        with _frame_lock:
+            _latest_frame = buf.tobytes()
 
     def destroy_node(self):
         self.cap.release()
-        cv2.destroyAllWindows()
         super().destroy_node()
 
 
