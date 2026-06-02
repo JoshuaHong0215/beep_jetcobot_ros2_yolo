@@ -1,4 +1,5 @@
 import rclpy as rp
+import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, Int32
 
@@ -13,7 +14,8 @@ class PickPlaceNode(Node):
         # 동작 정의
         self.speed = 30
         self.home_angles = [0, 0, 0, 0, 0, 0]
-        self.pick_coords = [150.0, 0.0, 120.0, -180.0, 0.0, 90.0]
+        # pick_coords: aruco_detector에서 받아온 마커 좌표로 덮어씌워짐 → 초기값은 None
+        self.pick_coords = None
         self.middle_coords = [150.0, 60.0, 200.0, -180.0, 0.0, 90.0]
         self.place_coords = [0.0, 150.0, 120.0, -180.0, 0.0, 90.0]
 
@@ -22,9 +24,17 @@ class PickPlaceNode(Node):
         self.coord_pub = self.create_publisher(Float32MultiArray, '/coord_command', 10)
         self.gripper_pub = self.create_publisher(Int32, '/gripper_command', 10)
 
-        self.get_logger().info('pick_place_node 시작')
+        # /marker_coord topic을 subscribe → 마커 좌표가 들어오면 marker_coord_cb 콜백 실행
+        self.create_subscription(Float32MultiArray, '/marker_coord', self.marker_coord_cb, 10)
+
+        self.get_logger().info('pick_place_node 시작 — 마커 감지 대기 중...')
         self.run()
 
+
+    def marker_coord_cb(self, msg):
+        # /marker_coord topic에서 6개 값(x,y,z,rx,ry,rz)을 받아 pick_coords에 저장
+        self.pick_coords = list(msg.data)
+        self.get_logger().info(f'마커 좌표 수신: {self.pick_coords}')
 
     def send_angles(self, angles):
         msg = Float32MultiArray()
@@ -67,6 +77,12 @@ class PickPlaceNode(Node):
 
     # 동작 전체 구현
     def run(self):
+        # pick_coords가 None이면 aruco_detector에서 마커 좌표가 아직 안 온 것
+        # spin_once: ROS2 이벤트를 한 번 처리 → 콜백이 실행될 기회를 줌
+        # 마커 좌표가 들어올 때까지 반복 대기
+        while self.pick_coords is None:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
         self.get_logger().info('--- Pick and place start ---')
 
         self.go_home()
