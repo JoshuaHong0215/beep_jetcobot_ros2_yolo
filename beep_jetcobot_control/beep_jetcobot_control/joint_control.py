@@ -32,6 +32,13 @@ class JointControlNode(Node):
             )
 
         self.create_subscription(
+            Float32MultiArray,
+            '/coord_servo',
+            self.servo_command_cb,
+            10
+            )
+
+        self.create_subscription(
             Int32, 
             '/gripper_command', 
             self.gripper_command_cb, 
@@ -88,6 +95,11 @@ class JointControlNode(Node):
 
 
     def coords_command_cb(self, msg):
+        coords = list(msg.data)
+        if len(coords) == 6:
+            self.mc.send_coords(coords, self.speed, 0)
+
+    def servo_command_cb(self, msg):
         coords = list(msg.data)
         if len(coords) == 6:
             self.mc.send_coords(coords, self.speed, 0)

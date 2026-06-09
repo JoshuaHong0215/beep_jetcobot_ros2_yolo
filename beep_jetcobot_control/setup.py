@@ -31,7 +31,12 @@ setup(
         'console_scripts': [
             'joint_control = beep_jetcobot_control.joint_control:main',
             'pick_place = beep_jetcobot_control.pick_place:main',
+            'pick_place_angle = beep_jetcobot_control.pick_place_angle:main',
             'aruco_detector = beep_jetcobot_control.aruco_detector:main',
+            'contour_detector = beep_jetcobot_control.contour_detector:main',
+            'handeye_tf_publisher = beep_jetcobot_control.handeye_tf_publisher:main',
+            'pick_place_tf = beep_jetcobot_control.pick_place_tf:main',
+            'pick_place_ver2 = beep_jetcobot_control.pick_place_ver2:main',
         ],
     },
 )
