@@ -1,4 +1,4 @@
-# ver5: mode 분기
+# ver6: ver5 + execute_cb 분해
 # - mode 0: work → storage (기존)
 # - mode 1: storage → loading (J1 -90도 회전)
 
@@ -28,7 +28,7 @@ LIFT_Z = 317.1     # 공통 ready 높이
 
 # mode 0: work → storage
 # CAM_TCP: 카메라 정렬 후 그리퍼를 박스 위로 이동할 오프셋 (base 프레임)
-CAM_TCP_X_WORK       = 130
+CAM_TCP_X_WORK       = 120
 CAM_TCP_Y_WORK       = 5.0
 PICK_Z_WORK          = 120.1
 Z_MIN_WORK           = 100.0     # work 영역 안전 클램프 (지면 기준)
@@ -57,7 +57,7 @@ MODE_WORK_TO_STORAGE    = 0
 MODE_STORAGE_TO_LOADING = 1
 
 
-class PickPlaceActionServerVer5(Node):
+class PickPlaceActionServerVer6(Node):
     def __init__(self):
         super().__init__('pick_place_action_server')
 
@@ -101,7 +101,7 @@ class PickPlaceActionServerVer5(Node):
             callback_group=cb,
         )
 
-        self.get_logger().info('pick_place_action_server_ver5 시작')
+        self.get_logger().info('pick_place_action_server_ver6 시작')
 
     def detection_cb(self, msg):
         if len(msg.data) < 6:
@@ -316,53 +316,59 @@ class PickPlaceActionServerVer5(Node):
 
         return True
 
-    # ── execute ──────────────────────────────────────────────────
-    def execute_cb(self, goal_handle):
-        self.get_logger().info('태스크 실행 시작')
-        result = PickPlace.Result()
-
+    # ── execute helpers ──────────────────────────────────────────
+    def _validate_and_select_params(self, goal_handle):
+        """task_id/mode 검증 + mode별 파라미터 선택. 실패 시 abort 후 None."""
         task_id = goal_handle.request.task_id
         mode    = int(goal_handle.request.mode)
 
-        # 검증
         class_id = TASK_CLASS.get(task_id, -1)
         if class_id == -1:
             self.get_logger().error(f'유효하지 않은 task_id: {task_id}')
-            result.success = False
-            result.message = f'유효하지 않은 task_id: {task_id} (0=파란, 1=빨간, 2=노란)'
             goal_handle.abort()
-            return result
+            return None
 
         if mode not in (MODE_WORK_TO_STORAGE, MODE_STORAGE_TO_LOADING):
             self.get_logger().error(f'유효하지 않은 mode: {mode}')
-            result.success = False
-            result.message = f'유효하지 않은 mode: {mode} (0=work→storage, 1=storage→loading)'
             goal_handle.abort()
-            return result
+            return None
 
-        # mode별 파라미터
         if mode == MODE_WORK_TO_STORAGE:
-            pick_z       = PICK_Z_WORK
-            cam_tcp_x    = CAM_TCP_X_WORK
-            cam_tcp_y    = CAM_TCP_Y_WORK
-            j1_offset    = 0.0
-            self.z_min   = Z_MIN_WORK
-            place_angles = PLACE_ANGLES_STORAGE
+            params = {
+                'mode':         mode,
+                'class_id':     class_id,
+                'class_name':   CLASS_NAME.get(class_id, '알 수 없음'),
+                'pick_z':       PICK_Z_WORK,
+                'cam_tcp_x':    CAM_TCP_X_WORK,
+                'cam_tcp_y':    CAM_TCP_Y_WORK,
+                'j1_offset':    0.0,
+                'z_min':        Z_MIN_WORK,
+                'place_angles': PLACE_ANGLES_STORAGE,
+            }
         else:
-            pick_z       = PICK_Z_STORAGE
-            cam_tcp_x    = CAM_TCP_X_STORAGE
-            cam_tcp_y    = CAM_TCP_Y_STORAGE
-            j1_offset    = J1_OFFSET_STORAGE
-            self.z_min   = Z_MIN_STORAGE
-            place_angles = None   # mode 1은 place_at_coords 사용
+            params = {
+                'mode':         mode,
+                'class_id':     class_id,
+                'class_name':   CLASS_NAME.get(class_id, '알 수 없음'),
+                'pick_z':       PICK_Z_STORAGE,
+                'cam_tcp_x':    CAM_TCP_X_STORAGE,
+                'cam_tcp_y':    CAM_TCP_Y_STORAGE,
+                'j1_offset':    J1_OFFSET_STORAGE,
+                'z_min':        Z_MIN_STORAGE,
+                'place_angles': None,   # mode 1은 place_at_coords 사용
+            }
 
-        class_name = CLASS_NAME.get(class_id, '알 수 없음')
         self.get_logger().info(
-            f'타겟: {class_name}(id={class_id}) | mode={mode} | '
-            f'pick_z={pick_z} | cam_tcp=({cam_tcp_x},{cam_tcp_y}) | '
-            f'j1_offset={j1_offset} | z_min={self.z_min}'
+            f'타겟: {params["class_name"]}(id={params["class_id"]}) | mode={params["mode"]} | '
+            f'pick_z={params["pick_z"]} | cam_tcp=({params["cam_tcp_x"]},{params["cam_tcp_y"]}) | '
+            f'j1_offset={params["j1_offset"]} | z_min={params["z_min"]}'
         )
-        self.target_class = class_id
+        return params
+
+    def _run_pick(self, goal_handle, params):
+        """home → ready → (회전) → servo → pick. 성공 시 True."""
+        self.target_class = params['class_id']
+        self.z_min        = params['z_min']
 
         self.open_gripper()
         self.go_home()
@@ -372,69 +378,66 @@ class PickPlaceActionServerVer5(Node):
         self.go_ready()
 
         # 2) mode 1이면 J1 -90도 회전
-        if not self.rotate_j1_from_ready(j1_offset):
-            self.target_class = None
-            result.success = False
-            result.message = 'J1 회전 실패'
-            goal_handle.abort()
-            return result
+        if not self.rotate_j1_from_ready(params['j1_offset']):
+            return False
 
         # 3) visual servo
         self.marker_error = None
-        converged = self.visual_servo(goal_handle, mode)
-
-        if not converged:
+        if not self.visual_servo(goal_handle, params['mode']):
             self.publish_feedback(goal_handle, 'SERVO_FAILED')
             self.go_home()
-            self.target_class = None
-            result.success = False
-            result.message = '시각 서보 수렴 실패'
-            goal_handle.abort()
-            return result
+            return False
 
         # 4) pick
         time.sleep(0.5)
-        success = self.pick(goal_handle, pick_z, cam_tcp_x, cam_tcp_y)
+        return self.pick(goal_handle, params['pick_z'], params['cam_tcp_x'], params['cam_tcp_y'])
 
-        # 5) place
-        if success:
-            if mode == MODE_WORK_TO_STORAGE:
-                # mode 0: AMR 충돌 방지 — pick 후 ready → J1 -90도 → storage로
-                self.go_ready()
-                self.rotate_j1_from_ready(-90.0)
-                self.place_at_angles(goal_handle, place_angles)
-                # 적재 후 J3을 펴서 ee 들어올림 (joint 명령으로 IK 다중해 회피)
-                lifted = list(place_angles)
-                lifted[2] += 15.0   # J3 (elbow) 펴기 → 그리퍼 위로 ~50-70mm
-                self.send_angles(lifted)
-                time.sleep(1.5)
-                self.go_ready()
-            else:
-                # mode 1: 살짝 들어올린 뒤 work ready 거쳐서 loading zone에 떨어뜨림
-                c = self.ee_coords
-                self.send_coords([c[0], c[1], c[2] + 70, c[3], c[4], c[5]])
-                time.sleep(0.7)
-                self.z_min = Z_MIN_WORK
-                self.go_ready()
-                self.place_at_coords(
-                    goal_handle,
-                    LOADING_X, LOADING_Y, LOADING_Z,
-                    LOADING_RX, LOADING_RY, LOADING_RZ,
-                )
+    def _run_place(self, goal_handle, params):
+        """mode별 place 분기."""
+        if params['mode'] == MODE_WORK_TO_STORAGE:
+            self.place_at_angles(goal_handle, params['place_angles'])
+        else:
+            # mode 1: 살짝 들어올린 뒤 work ready 거쳐서 loading zone에 떨어뜨림
+            c = self.ee_coords
+            self.send_coords([c[0], c[1], c[2] + 70, c[3], c[4], c[5]])
+            time.sleep(0.7)
+            self.z_min = Z_MIN_WORK
+            self.go_ready()
+            self.place_at_coords(
+                goal_handle,
+                LOADING_X, LOADING_Y, LOADING_Z,
+                LOADING_RX, LOADING_RY, LOADING_RZ,
+            )
 
-        # 6) work ready 복귀
+    # ── execute ──────────────────────────────────────────────────
+    def execute_cb(self, goal_handle):
+        self.get_logger().info('태스크 실행 시작')
+        result = PickPlace.Result()
+
+        params = self._validate_and_select_params(goal_handle)
+        if params is None:
+            result.success = False
+            result.message = '검증 실패'
+            return result
+
+        pick_success = self._run_pick(goal_handle, params)
+
+        if pick_success:
+            self._run_place(goal_handle, params)
+
+        # work ready 복귀
         self.publish_feedback(goal_handle, 'GO_READY')
         self.go_ready()
 
         self.target_class = None
 
-        if success:
+        if pick_success:
             result.success = True
-            result.message = f'{class_name} mode={mode} 완료'
+            result.message = f'{params["class_name"]} mode={params["mode"]} 완료'
             goal_handle.succeed()
         else:
             result.success = False
-            result.message = 'ee_coords 없음'
+            result.message = '픽 시퀀스 실패'
             goal_handle.abort()
 
         return result
@@ -442,7 +445,7 @@ class PickPlaceActionServerVer5(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = PickPlaceActionServerVer5()
+    node = PickPlaceActionServerVer6()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
